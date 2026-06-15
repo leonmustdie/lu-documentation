@@ -25,7 +25,6 @@ copyrighted content.
 | Convert textures | PNG |
 | Convert meshes | OBJ |
 | Export rigged characters | glTF (`.glb`) with skeleton + weights |
-| Export animations | `.glb` with baked animation clips |
 | Recover scripts | NB1: decompiled Lua • PiP: original Lua source |
 
 ## Quick start
@@ -75,7 +74,7 @@ Full format specifications live in [`docs/`](docs/):
 ## Status
 
 Solved for both games: container, textures, skeletons, meshes, rigged characters (mostly), and scripts. Known gaps are tracked in the docs.
-(NB1 scale-channel animation; PiP Scaleform UI units and in-executable
+(NB1 ; PiP Scaleform UI units and in-executable
 framework bytecode).
 
 ## License
