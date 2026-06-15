@@ -75,8 +75,7 @@ Full format specifications live in [`docs/`](docs/):
 
 ## Status
 
-Solved for both games: container, textures, skeletons, meshes, rigged +
-animated characters, and scripts. Known gaps are tracked in the docs
+Solved for both games: container, textures, skeletons, meshes, rigged characters (mostly), and scripts. Known gaps are tracked in the docs.
 (NB1 scale-channel animation; PiP Scaleform UI units and in-executable
 framework bytecode).
 
