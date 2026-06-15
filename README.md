@@ -44,7 +44,7 @@ python3 tools/pip_dump.py /path/to/pip_files/         -o pip_dump/
 ```
 
 Each dumper produces extracted chunks, textures (PNG), models (OBJ),
-rigged + animated character GLBs, scripts, audio manifests, and a report.
+rigged character GLBs, scripts, audio manifests, and a report.
 
 A small self-made sample (`samples/`) is included to demonstrate the
 tools without any game data — see `samples/README.md`.
