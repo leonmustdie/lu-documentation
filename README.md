@@ -50,14 +50,14 @@ tools without any game data see `samples/README.md`.
 
 ## Documentation
 
-Full format specifications live in [`docs/`](docs/):
+Full format specifications live in [`tools/docs/`](tools/docs/):
 
-- **[`docs/LU_FORMAT.md`](docs/LU_FORMAT.md)**  NB1 container, meshes,
+- **[`tools/docs/LU_FORMAT.md`](tools/docs/LU_FORMAT.md)**  NB1 container, meshes,
   textures, skeletons, skinning, and the compiled-Lua script format.
-- **[`docs/PIP_FORMAT.md`](docs/PIP_FORMAT.md)**  Panic in Paradise LUH
+- **[`tools/docs/PIP_FORMAT.md`](tools/docs/PIP_FORMAT.md)**  Panic in Paradise LUH
   container, chunk-compatibility matrix, plaintext Lua scripts, the
   engine API surface, and mesh formats.
-- **[`docs/CU_FORMAT.md`](docs/CU_FORMAT.md)**  `.cu` audio-manifest
+- **[`tools/docs/CU_FORMAT.md`](tools/docs/CU_FORMAT.md)**  `.cu` audio-manifest
   format.
 
 ## Tools overview
