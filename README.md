@@ -9,13 +9,13 @@ This project is an **independent, non-commercial preservation and
 research effort**. It is not affiliated with, endorsed by, or connected
 to the games' original developers or publishers.
 
-## ⚠️ Bring your own files
+## Bring your own files
 
 This repository contains **only original code and documentation**. It
-ships **no game data** — no `.lu`/`.cu`/`.xex` files, no extracted
+ships **no game data**, no `.lu`/`.cu`/`.xex` files, no extracted
 textures, models, scripts, or audio. To use these tools you must supply
-files from a copy of the game you legally own. Nothing here redistributes
-copyrighted content.
+files from a copy of the game you legally own and have legally dumped on your own system. 
+Nothing here redistributes copyrighted content.
 
 ## What it does
 
@@ -46,18 +46,18 @@ Each dumper produces extracted chunks, textures (PNG), models (OBJ),
 rigged character GLBs, scripts, audio manifests, and a report.
 
 A small self-made sample (`samples/`) is included to demonstrate the
-tools without any game data — see `samples/README.md`.
+tools without any game data see `samples/README.md`.
 
 ## Documentation
 
 Full format specifications live in [`docs/`](docs/):
 
-- **[`docs/LU_FORMAT.md`](docs/LU_FORMAT.md)** — NB1 container, meshes,
+- **[`docs/LU_FORMAT.md`](docs/LU_FORMAT.md)**  NB1 container, meshes,
   textures, skeletons, skinning, and the compiled-Lua script format.
-- **[`docs/PIP_FORMAT.md`](docs/PIP_FORMAT.md)** — Panic in Paradise LUH
+- **[`docs/PIP_FORMAT.md`](docs/PIP_FORMAT.md)**  Panic in Paradise LUH
   container, chunk-compatibility matrix, plaintext Lua scripts, the
   engine API surface, and mesh formats.
-- **[`docs/CU_FORMAT.md`](docs/CU_FORMAT.md)** — `.cu` audio-manifest
+- **[`docs/CU_FORMAT.md`](docs/CU_FORMAT.md)**  `.cu` audio-manifest
   format.
 
 ## Tools overview
@@ -83,6 +83,6 @@ Code: [MIT](LICENSE). Documentation (`docs/`): [CC BY 4.0](https://creativecommo
 
 ## Contributing
 
-Corrections and additional format findings are welcome — open an issue or
+Corrections and additional format findings are welcome  open an issue or
 pull request. Please do not attach game files or extracted assets to
 issues or PRs.
