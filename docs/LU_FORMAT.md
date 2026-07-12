@@ -413,3 +413,172 @@ name strings; a plausible bone count field (e.g. 0x82 = 130 for the bear,
 matching the 117-track clips plus leaf bones) and float data consistent
 with bind-pose transforms. Bone names are likely stored as CRC32 hashes
 matching the global naming scheme.
+
+## 15. Skeletons (type `04000001`) and skinning — SOLVED
+
+The real skeleton is type `04000001` (one per character; the type
+`04800018` chunks under `skeleton/` are physics/ragdoll definitions
+referenced from the socket section, not the skeleton).
+
+Header (offsets are absolute, all big-endian):
+
+| offset | meaning |
+|-------:|---------|
+| +0x10 | `{u32 records_ptr, u32 bone_count}` (naughtybear: 0x68, 117) |
+| +0x18 | `{u32 quats_ptr, u32 count}` — per-bone rest local rotations, float4 **xyzw** |
+| +0x30 | socket/attachment section ptrs + count (e.g. 22 sockets; references the 04800018 physics chunks by hash) |
+| +0x48 | `u32 hash_table_ptr` — bone_count × `{u32 name_hash, u32 bone_index}` sorted by hash. Bone **names are not shipped**, only hashes |
+
+Bone records: `bone_count` × 16B `{u32 transform_ptr, i32 parent, i32
+first_child, i32 next_sibling}` (−1 = none; parents always precede
+children). Each transform block is 144 bytes: two row-major 4×4 matrices
+(world bind transform; translation in row 3; rotations may carry
+**scale**, 0.015–1.0 on attachment bones) plus 16 scratch bytes.
+Convention is row-vector (D3D): `W_child = L · W_parent`.
+
+### 15.1 Skin palette
+
+Skinned vertices carry 4 blend-index bytes that are **not** skeleton
+indices — they enumerate the skeleton's *deform-bone subset* in
+ascending order (the shipped files do not contain the palette; the
+engine evidently rebuilds it from data not present, likely bone flags
+stripped at build). `lu_rig.py` recovers the mapping geometrically:
+weighted vertex centroids per skin slot are aligned to bone bind
+positions under a strict-monotonicity constraint (dynamic-programming
+sequence alignment). Validated on naughtybear: paw vertices resolve to
+the arm chain (bones 70–78), facial slots to the facial rig, bind-pose
+round-trip error = 0, and posed renders deform correctly. Caveat: facial
+bones come in co-located control/deform pairs; for those the choice
+within a pair is heuristic and may be off by one (visually identical at
+bind, may matter for animation retargeting).
+
+Rigid accessory submeshes (stride 40/32) use a private index space;
+`lu_rig.py` binds them to the nearest bone.
+
+### 15.2 Skeleton anatomy (the bears)
+
+117 bones: 0–9 root/spine/neck chain, 10–68 the **facial rig**
+(eyebrows, eyelids, muzzle/jaw chain 34–41, cheeks, ears 67/68 — the
+first game already has a full facial setup), 69–116 limbs plus
+attachment/twist helpers.
+
+## 16. Animation clips — format ~70% decoded
+
+Updating §14 with deeper findings (chunk type `04300000`, `anim_clip/`):
+
+* Clip header: +0x10 `float duration_seconds`; +0x20 `{table_ptr=0x60,
+  u32 track_count}`; track_count == skeleton bone_count and tracks map
+  to bones **by index** (record order).
+* Track table at 0x60: `{u32 data_off, u32 fmt}` per bone;
+  `FFFFFFFF` = bone untouched.
+* **fmt 1** — single static key, 4 bytes: a packed quaternion ending in
+  a 2-bit tag (observed trailing 0x04 pattern; `00 00 00 04` = identity).
+  Consistent with 2-bit largest-component + 3×10-bit smallest-three
+  packing; exact bit order not yet confirmed.
+* **fmt 3** — keyframed: the payload is a list of 16-byte
+  sub-records `{u32 data_ptr, u32 sub_fmt, f32 end_time, u32
+  count|flags}` — one per channel (observed 3 channels with key counts
+  35/36/37 ≈ one per rotation axis or T/R/S split). Each channel's data
+  block = header `{u32, u32, u32 times_ptr, u32}` then an array of
+  **u16 key times** (monotonic; ticks, scale TBD) followed by an array
+  of **float32 values** (small magnitudes, curve samples — possibly
+  with tangents).
+* fmt 0/2/6/8 exist; not yet mapped.
+
+Still open: exact fmt-1 bit order, the u16 tick rate, whether fmt-3
+floats are raw values or Hermite value+tangent pairs, and the fmt 2/6/8
+encodings. The skeleton's rest quaternions give a ground-truth oracle
+for finishing this.
+
+### 16.1 Animation format — FINAL (decoded, exportable)
+
+Decoded and validated by re-rendering clips on the rigged bears
+(`lu_anim.py` exports them into the .glb files):
+
+* Tracks map **1:1 to skeleton bones by index** (track count == bone
+  count; clips only fit skeletons with the same bone count).
+* Track payload = `fmt` × 16-byte channel records
+  `{u32 data_ptr, u32 sub_fmt, f32 end_time, u8 tag << 24}`.
+* Channel data header: `{u32 0, u16 key_count, u16 enc, u32 data_ptr,
+  u32 data_size}`. Two encodings, keyed by the high byte of `enc`:
+  * **0x34 (keyed)**: `key_count` × u16 key times at **240 ticks/second**,
+    immediately followed (unaligned) by `key_count` × 4 float32
+    `{value, tan_in, tan_out, w}` — a Hermite-style curve for ONE
+    component; `value` is a **delta from the skeleton's rest pose** for
+    that component.
+  * **0x08 (uniform)**: `key_count` raw float32 samples at **30 Hz**,
+    one component per channel; absolute values.
+* Channel `tag` selects the component: 0x04/0x05/0x06 = translation
+  x/y/z (metres, local space), 0x23/0x24/0x25 = rotation quaternion
+  x/y/z (w recomputed for unit norm; sign follows the rest pose),
+  0x08/0x09/0x0a = scale x/y/z.
+* **fmt 1** (single static key, 4 bytes): `00 00 00 xx` = exactly the
+  rest pose (67% of all statics). Non-zero statics are small packed
+  component deltas (3 data bytes + tag byte); currently exported as
+  rest pose — the residual error is a sub-degree pose offset.
+* Quaternions are standard xyzw and drop straight into glTF rotations.
+
+### 16.2 The "animation" chunks are compiled Lua 5.1
+
+Each chunk under `animation/` is a compiled Lua script with a 0x84-byte
+engine wrapper followed by a **standard Lua bytecode image**
+(`\x1bLua`, version 5.1, big-endian, Xbox 360). The embedded source
+paths name the originals (`...\scripts\naughtybearbodystatemachine.lua`).
+These can be decompiled to readable source with `unluac`
+(java -jar unluac.jar file.luac) or luadec built for big-endian 5.1 —
+they contain the state machines, AI selectors, and gameplay glue logic.
+
+### 16.3 Script bytecode format (full spec)
+
+Each script chunk = 0x84-byte engine wrapper, then a Lua 5.1 image,
+then an engine footer. Deviations from stock luac 5.1 (all
+little-endian; the 360 byte-swaps at load):
+
+| difference | detail |
+|---|---|
+| header | 13 bytes — the number-size byte (0x08) appears twice; drop one for the standard 12-byte header |
+| top-level proto | omits the `nups` byte (always 0); nested protos are standard 4-byte `{nups, nparams, is_vararg, maxstack}` |
+| constant type 0xFE | 8-byte interned string hash: CRC32 of the lowercase string, zero-extended to u64. Replace with a string constant to obtain stock bytecode |
+
+`lua_decompile.py` performs this transcode, resolves 0xFE hashes
+through a CRC32 dictionary mined from every string in the game files,
+and drives unluac for source output (587/589 scripts decompile).
+Unresolved hashes appear as `__hash_0x........` string literals.
+
+## 17. Unit notes
+
+* `characters.lu` = the game-wide sound database (2935 cues/bindings,
+  934 events, 665 waves) plus a 1-bone dummy rig. Not characters.
+* `startmenu.lu` region variants (`startmenu_<lang>.lu`) hold 521
+  localization/UI chunks of type 04d00002 each.
+* 147 clips target a 116-bone skeleton that is not present in any
+  shipped Xbox 360 unit examined so far.
+
+## 18. Panic in Paradise
+Panic in Paradise uses a different container (LUH) and partially
+different chunk formats. All PiP documentation lives in PIP_FORMAT.md;
+this file covers the original Naughty Bear (x36 containers) only.
+
+## 16.4 Animation channel encodings — CORRECTED (all three families)
+
+Earlier exports decoded only one of three channel encodings, dropping
+~80% of channels (symptom: characters barely moved). The channel data
+header is `{u32 0, u16 key_count, u16 enc, u32 key_ptr, u32 data_size}`;
+the **enc** field selects the encoding, and `data_size` must match the
+family exactly (this is also how to disambiguate them safely):
+
+| enc (lo byte) | family | layout | dequant |
+|---|---|---|---|
+| 0x1e | raw uniform | `key_count` × f32, uniform in [0,end_time] | value as-is (absolute); `data_size == 4·kc` |
+| 0xf0 | keyed Hermite | u16 times @240/s, then `key_count` × N f32 `{value,…}` where **N = enc hi-nibble** (1–4) | value = float[0] per key, **delta from rest**; `data_size == 2·kc + 4·N·kc` |
+| 0x78 | u8-quantized uniform | `{f32 min, f32 max, u32 flags}` then `key_count` × u8 | value = min + (max−min)·u8/255, uniform in time; `data_size == 12 + kc` |
+
+The u8-quantized family (hi bytes 0x48/0x58/0x74…) is the **most common**
+encoding in the shipped clips, so omitting it is what flattened the
+animations. Tags as before: 0x04/05/06 translation xyz, 0x23/24/25
+rotation quat xyz. Decoder enforces exact `data_size` per family and
+rejects any channel whose dequantised values are non-finite or
+|value|>100, so not-yet-modelled encodings degrade to rest pose rather
+than injecting garbage. Implemented in nb1_clipfix.py (used by
+lu_anim.py). Validated by render: full-body dynamic motion, ~14 active
+channels/clip vs ~5 before.

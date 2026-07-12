@@ -174,3 +174,67 @@ this toolkit). Findings:
   HazingPlayerManager (the scare/torment scoring core), MainCameraParameters
   (55 setters), DamageFXConfigHelper, the grade-tier enums
   (eBRONZE/SILVER/GOLD/PLATINE_GRADE).
+
+## 9. Mesh format 34000007 — SOLVED (session 5)
+
+PiP's mesh chunk (record type 34000007) shares the **same inner
+container** as NB1's 04000007: header `{0x20, entry_count, total_size}`
+then a `34200004` sub-chunk holding the GPU vertex/index buffers with
+the same trailer-described submesh layout. The existing NB1 decoders
+work directly:
+* rigid props (weapons, hats) → `lu_convert.convert_mesh` (auto-detected
+  layouts, mostly stride-36 pos@0 uv@32; some 28/40/44/52)
+* skinned characters → `lu_rig.extract_skinned_mesh` + palette solve,
+  exported as rigged GLB (skeleton + weights), same pipeline as NB1.
+
+Only change needed: look for meshes in the `type_34000007/` directory in
+addition to `mesh_buffers/`. Validated by render — weapons read as their
+real shapes (katana, swords, guns) and characters as correctly-formed
+bears; costume `_top/_mid/_bottom` pieces decode as the right garment
+geometry.
+
+**Batch result: 157 rigged character GLBs + 153 rigid prop OBJs**
+covering the full PiP cast (player, all NPCs) and the complete arsenal
+and wardrobe. `pip_dump.py` now produces these automatically.
+
+### Remaining open items
+* anim_clip (04300000) reworked curve encoding — static rigged export
+  works; animation playback still needs the clip format decoded.
+* Scaleform front-end units; embedded framework bytecode.
+
+## 10. Animation clips 04300000 — SOLVED (session 6)
+
+PiP reuses NB1's channel and keyframe encoding verbatim; only the outer
+wrapper changed — tracks map to bones by **name hash** instead of index.
+
+Clip header (big-endian):
+
+| offset | field |
+|-------:|-------|
+| 0x10 | f32 duration |
+| 0x1c | u32 section1_ptr (bone-name hashes) |
+| 0x20 | u32 track_count |
+| 0x30 | u32 section2_ptr (track table) |
+| 0x34 | u32 track_count |
+
+* **section1**: `track_count` u32 bone-name hashes (one per track).
+  Resolved to skeleton bone indices via the skeleton's sorted
+  `{name_hash, index}` table at +0x48 (§15, byte-compatible with NB1).
+* **section2**: `track_count` × `{u32 channel_list_ptr, u32 channel_count}`;
+  ptr 0 / 0xffffffff = untouched bone.
+* **channels**: `channel_count` × 16B `{u32 data_ptr, u32 sub_fmt,
+  f32 end_time, u8 tag<<24}` — identical to NB1.
+* **channel data**: `{u32 0, u16 key_count, u16 enc, u32 key_ptr,
+  u32 data_size}`; enc hi 0x08 = uniform 30 Hz f32 samples (absolute),
+  hi 0x34 = keyed u16 times @240/s + 4 f32/key (delta from rest).
+* tags 0x04/05/06 = translation xyz, 0x23/24/25 = rotation quat xyz.
+
+`pip_anim.py` decodes these and bakes them into the rigged GLBs (reusing
+lu_anim's bake/export). Validated by render — NPC clips play correct
+full-body motion (e.g. a lunging attack) with clean skin deformation.
+**Result: ~170 animations per full character**, baked into animated GLBs.
+
+### PiP: format coverage COMPLETE
+container, textures, meshes, skeletons, scripts, engine API, and now
+animation are all solved. Remaining are non-blocking: Scaleform UI units
+and the in-executable framework bytecode.
