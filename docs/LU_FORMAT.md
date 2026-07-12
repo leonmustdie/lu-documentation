@@ -116,7 +116,10 @@ which ends exactly at `data_base`.
 | +0x14 | flags | pool / linkage flags (§5) |
 
 Chunks are packed in record order in the image with small alignment gaps
-(0x10 for CPU data; GPU/audio data is 0x800/0x1000-aligned).
+(0x10 for CPU data; GPU/audio data is 0x800/0x1000-aligned). CPU-data gaps
+are filled with `0xBF`, confirmed with zero exceptions across two full
+retail script containers (347 and 965 records) — see §19.1 for why this
+matters when writing modified data back, not just reading it.
 
 Names are not stored in the table. Many can be recovered because chunk data
 embeds them: `sound_binding`/`sound_event` chunks contain the `FX_*` name in
@@ -179,8 +182,11 @@ texture) is byte-identical to the chunk of the same hash stored in
                  u16_be compressed_size, payload      ; explicit (partial) frame
   ```
 
-  Frames repeat until their uncompressed sizes total the slice size (a few
-  pad bytes may follow within the segment). Within one segment the
+  Frames repeat until their uncompressed sizes total the slice size; each
+  segment ends with a fixed **5-byte all-zero terminator** after its final
+  frame, present in every segment examined, not a variable pad (see §19.2
+  for the exact encode-side convention retail follows, needed to write a
+  segment back rather than just decode one). Within one segment the
   concatenated payloads form **one continuous LZX bitstream**
   (frame-realigned to 16 bits every 0x8000 output bytes, no block resets),
   decoded with the window size from the pool-info struct (`0x100000` →
@@ -582,3 +588,109 @@ rejects any channel whose dequantised values are non-finite or
 than injecting garbage. Implemented in nb1_clipfix.py (used by
 lu_anim.py). Validated by render: full-body dynamic motion, ~14 active
 channels/clip vs ~5 before.
+
+## 19. Writing modified containers back (NB1 x36) — SOLVED
+
+Everything above this section is read-side: extracting and understanding
+what's in a container. This section is write-side: producing a modified
+container the game accepts, which turned out to have its own convention-
+level requirements that reading never surfaces, because a decoder that
+merely counts output bytes doesn't need to care about them, but the
+retail encoder (and thus retail files) follow them anyway. Solved and
+verified in-game, not just structurally.
+
+### 19.1 Record table: splice-safe resizing
+
+§4 already notes CPU-data records sit at 16-byte-aligned offsets with
+`0xBF`-filled gaps. The consequence for writing: if a record's chunk
+changes size (recompiled script bytecode is rarely byte-identical in
+length to the original), every later record's offset must shift by a
+multiple of 16, not by the raw byte delta. A raw-delta shift is
+structurally valid — the container still parses, sizes and offsets are
+still internally consistent — but it walks every later record off the
+16-byte grid, which the retail engine does not tolerate. This was found
+the hard way: a build with no resize (the edit happened to land at the
+same byte length) booted and played correctly; a second build with a
+similar edit that was a few bytes longer, raw-delta shifted, crashed
+outright at launch. The only structural difference between the two was
+the broken alignment. The fix is mechanical: round the size delta up to
+the next multiple of 16 and fill the difference with `0xBF`, matching
+what retail already does at every naturally-occurring size boundary.
+
+### 19.2 XMemCompress LZX segment encoding
+
+§7 documents the frame format for reading. Retail's *encoder* follows a
+narrower convention than the format strictly requires, and a rebuilt
+segment must match it or the file's structural checksum-equivalent
+(internal consistency the loader assumes but doesn't explicitly verify)
+silently breaks:
+
+* One LZX VERBATIM block per 0x8000 (32 KB) output frame — matches the
+  read-side frame-realignment already noted in §7.
+* **The final frame of every segment always uses the 5-byte escape header
+  form** (`0xFF, u16_be uncompressed_size, u16_be compressed_size,
+  payload`), even when it's a full 32 KB frame that a plain 2-byte header
+  could represent. This is a retail convention, not a format requirement.
+  The toolkit's own encoder documents this as confirmed across all 10
+  segments of two retail files (`global.lu` and `levelcommon.lu`),
+  unanimous, zero exceptions; independently reconfirmed here on
+  `global.lu` specifically (2 segments, 33 and 30 frames) across three
+  builds — unmodified retail, a same-size rebuild, and a resized
+  rebuild — all matching frame-for-frame, since folded into this
+  project's automated regression tests.
+* A **non-final** frame also escapes if its plain 2-byte compressed-size
+  header would collide with the `0xFF` escape sentinel, i.e. compressed
+  size ≥ `0xFF00`.
+* Every segment ends with the 5-byte all-zero terminator noted in §7's
+  revision. Structurally necessary for any decoder that loops "read a
+  frame header, stop at the terminator" rather than stopping once it has
+  produced the expected number of output bytes; retail files carry it
+  even though the total-output-size approach (what read-side tooling here
+  uses) never needed it to decode correctly.
+
+### 19.3 Verification: layer the checks, don't trust self-consistency alone
+
+The one real bug found while building this (§19.1's misaligned-record
+crash) is instructive about *what kind* of check catches *what kind* of
+mistake. A self-round-trip, encode a segment, decode it back with this
+project's own reader, reported clean success on the misaligned file: the
+LZX bitstream itself was correct, so the compression layer's own
+self-check had nothing to catch. The bug lived one layer up, in the
+record table's byte offsets, which the compression layer neither reads
+nor validates. It surfaced only once a check existed that actually
+compared the *container's structural layout* (record alignment, gap
+fill) against retail convention, independent of whether the compressed
+bytes decoded correctly at all.
+
+Separately, and for a different reason: a decoder and an encoder written
+by the same person are also not sufficient evidence of correctness for
+the compression layer itself, even though no divergence has yet shown up
+there in this project's real files, because a shared blind spot in both
+directions would look identical to success. The mitigation is decoding
+the freshly-written segment with an independently-sourced LZX
+implementation (libmspack, unrelated codebase and author) and comparing
+byte-for-byte against the intended image, on top of, not instead of, the
+structural check. Anyone else implementing an NB1 x36 writer should keep
+both layers: structural validation of the record table's own
+conventions, and independent decode validation of the compressed bytes.
+Neither one substitutes for the other, they catch different mistakes.
+
+### 19.4 Script re-injection (extends §16.3)
+
+§16.3 documents decompiling a script chunk's Lua 5.1 image to readable
+source. The reverse, editing that source and writing a new script chunk
+back, is solved with one safety gate: recompile the edited source,
+re-transcode it through §16.3's wrapper/constant conventions, then
+decompile the *result* a second time and diff it against a decompile of
+the *original* chunk, function by function. A function whose decompile
+doesn't reproduce byte-faithfully (the decompiler is not a perfect
+inverse for 100% of observed bytecode shapes) is refused rather than
+injected, since silently splicing a divergent recompile risks corrupting
+behavior the edit never intended to touch. Functions that do round-trip
+faithfully ship using only the recompiled bytes for the parts actually
+edited; everything else in the chunk keeps its original game bytes
+untouched. Combined with §19.1 and §19.2, this produces a modified `.lu`
+that boots and runs correctly, verified in-game with a numeric gameplay
+constant edit (an NPC fear-response scaling table) both scaled and
+replaced outright, each confirmed to alter the actual in-game behavior
+as intended.
